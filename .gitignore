@@ -1,0 +1,132 @@
+# ============================================
+# MÔI TRƯỜNG ẢO PYTHON
+# ============================================
+.venv/
+venv/
+env/
+ENV/
+
+# ============================================
+# BIÊN DỊCH PYTHON / CACHE
+# ============================================
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+
+# ============================================
+# PYTEST / TESTING
+# ============================================
+.pytest_cache/
+.pytest_cache/v/
+.pytest_cache/v/cache/
+htmlcov/
+.tox/
+.nox/
+.coverage
+.coverage.*
+.cache
+nosetests.xml
+coverage.xml
+*.cover
+.hypothesis/
+
+# ============================================
+# FILE MÔI TRƯỜNG / BIẾN MÔI TRƯỜNG
+# ============================================
+.env
+.env.local
+.env.*.local
+!.env.example
+
+# ============================================
+# IDE / EDITOR
+# ============================================
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+*.sublime-project
+*.sublime-workspace
+
+# ============================================
+# PLATFORMIO / FIRMWARE
+# ============================================
+.pio/
+.pioenvs/
+.piolibdeps/
+.pio/build/
+firmware/.pio/
+firmware/.vscode/.browse.c_cpp.db*
+firmware/.vscode/c_cpp_properties.json
+firmware/.vscode/launch.json
+firmware/.vscode/ipch
+firmware/build/
+*.elf
+*.hex
+*.bin
+
+# ============================================
+# DỮ LIỆU (không commit dữ liệu thô)
+# ============================================
+data/raw/*
+data/processed/*
+data/labled/*
+!data/raw/.gitkeep
+!data/processed/.gitkeep
+!data/labled/.gitkeep
+
+# ============================================
+# HỆ ĐIỀU HÀNH
+# ============================================
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+
+# ============================================
+# LOGS / DATABASE
+# ============================================
+*.log
+*.sqlite
+*.sqlite3
+*.db
+logs/
+
+# ============================================
+# WEB SERVER (nếu có Node.js)
+# ============================================
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+package-lock.json
+yarn.lock
+
+# ============================================
+# KHÁC
+# ============================================
+*.tmp
+*.temp
+*.bak
+*.orig

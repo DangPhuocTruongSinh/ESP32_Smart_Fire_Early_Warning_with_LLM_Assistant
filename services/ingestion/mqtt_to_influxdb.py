@@ -1,0 +1,96 @@
+import json
+import time
+import ssl
+from paho.mqtt.client import Client
+from influxdb_client_3 import InfluxDBClient3, Point
+
+import os
+from dotenv import load_dotenv
+
+load_dotenv()
+
+# ================= InfluxDB =================
+INFLUX_HOST = os.getenv("INFLUX_HOST")
+INFLUX_TOKEN = os.getenv("INFLUX_TOKEN")
+ORG =  os.getenv("ORG")
+BUCKET = os.getenv("BUCKET")
+
+
+# ================= MQTT =================
+MQTT_HOST = os.getenv("MQTT_HOST")
+MQTT_PORT = int(os.getenv("MQTT_PORT"))
+MQTT_USER = os.getenv("MQTT_USER")
+MQTT_PASS = os.getenv("MQTT_PASS")
+TOPIC = os.getenv("TOPIC")
+
+
+
+influx_client = InfluxDBClient3(
+    host=INFLUX_HOST,
+    token=INFLUX_TOKEN,
+    org=ORG
+)
+
+# query = """SELECT *
+#         FROM 'environment'
+#         WHERE time >= now() - interval '24 hours'
+#         ORDER BY time DESC"""
+
+# table = influx_client.query(query=query, database=BUCKET, language="sql")
+
+# ================= Validation =================
+def is_valid(data):
+    return (
+        0 <= data["temperature"] <= 60 and
+        0 <= data["humidity"] <= 100 and
+        0 <= data["gas"] <= 4095
+    )
+
+
+# ================= MQTT Callbacks =================
+def on_connect(client, userdata, flags, rc):
+    print("MQTT connected with code:", rc)
+    if rc == 0:
+        client.subscribe(TOPIC)
+        print("Subscribed to", TOPIC)
+    else:
+        print("Connection failed")
+
+def on_message(client, userdata, msg):
+    try:
+        payload = json.loads(msg.payload.decode())
+        print("Received:", payload)
+
+        if not is_valid(payload):
+            print("Invalid data, skipped")
+            return
+
+        point = (
+            Point("environment")
+            .tag("device", payload.get("device", "esp32_01"))
+            .field("temperature", float(payload["temperature"]))
+            .field("humidity", float(payload["humidity"]))
+            .field("gas", int(payload["gas"]))
+            .time(time.time_ns())
+        )
+
+        influx_client.write(database=BUCKET, record=point)
+
+
+    except Exception as e:
+        print("Error:", e)
+
+# ================= MQTT Client =================
+mqtt_client = Client(client_id="mqtt_to_influx")
+mqtt_client.username_pw_set(MQTT_USER, MQTT_PASS)
+
+mqtt_client.tls_set(cert_reqs=ssl.CERT_NONE)
+mqtt_client.tls_insecure_set(True)
+
+mqtt_client.on_connect = on_connect
+mqtt_client.on_message = on_message
+
+mqtt_client.connect(MQTT_HOST, MQTT_PORT, 60)
+
+print("Listening MQTT...")
+mqtt_client.loop_forever()
