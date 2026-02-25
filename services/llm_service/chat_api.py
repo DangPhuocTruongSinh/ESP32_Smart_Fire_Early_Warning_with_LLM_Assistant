@@ -7,11 +7,16 @@ from langgraph.checkpoint.memory import InMemorySaver
 from langchain.agents import create_agent 
 from langchain_core.tools import tool
 from typing import Literal, Dict, Any
-import uvicorn
 import json
-import paho.mqtt.client as mqtt
+import requests
 
-from ..ingestion import mqtt_client
+# Lấy các model đang CHẠY (loaded vào RAM)
+response = requests.get("http://localhost:11434/api/ps")
+models = response.json()
+model_name = models["models"][0]["name"]
+print("Models: ", model_name)
+
+from services.ingestion import mqtt_client
 
 app = FastAPI()
 app.add_middleware(
@@ -58,25 +63,20 @@ def publish_mqtt(topic: str, payload: Dict[str, Any]) -> Dict[str, Any]:
             )
     
         # Wait for publish confirmation
-        result.wait_for_publish(timeout=2)
-        
-        if result.rc == mqtt.MQTT_ERR_SUCCESS:
-            print(f"✅ [MQTT] Published to {topic}")
-            print(f"   Payload: {json.dumps(payload, indent=2)}")
+        publish = result.wait_for_publish(timeout=2)
+        if publish:
             return {
                 "success": True,
                 "topic": topic,
                 "message": "Message sent successfully"
             }
         else:
-            print(f"❌ [MQTT] Publish failed: rc={result.rc}")
             return {
                 "success": False,
-                "error": f"MQTT error code: {result.rc}"
+                "error": "Publish timeout"
             }
             
     except Exception as e:
-        print(f"❌ [MQTT] Exception: {str(e)}")
         return {
             "success": False,
             "error": str(e)
@@ -84,7 +84,7 @@ def publish_mqtt(topic: str, payload: Dict[str, Any]) -> Dict[str, Any]:
 
 @tool
 def control_device(
-    device_id: Literal["stove", "ac_bedroom", "led_kitchen", "led_livingroom", "fan"],
+    device_id: str,
     action: Literal["on", "off"],
 ) -> Dict[str, Any]:
     """
@@ -119,6 +119,9 @@ def control_device(
     topic = f"device/{device_id}/control"
     result = publish_mqtt(topic, payload)
     
+
+    # Assume that Esp32 return a response that the action is successful
+    #(Esp32 need to send a message to MQTT topic "device/esp32/control/response" when the action is successful)
     # 5. Update local state if successful
     if result["success"]:
         device_states[device_id] = {
@@ -140,7 +143,7 @@ def control_device(
 tools = [get_sensor_data, control_device]
 
 # Ollama + Langchain for chatbot
-llm = ChatOllama(model="gwen3")
+llm = ChatOllama(model=model_name)
 memory = InMemorySaver()
 
 agent = create_agent(model=llm, tools=tools, checkpointer=memory)
@@ -151,6 +154,7 @@ class ChatRequest(BaseModel):
 class ControlRequest(BaseModel):
     device_id: str
     action: Literal["on", "off"]
+
 
 # API endpoint
 @app.post("/analyze")
@@ -252,6 +256,3 @@ async def list_devices():
     
     return {"devices": devices}
 
-if __name__ == "__main__":
-    # Chạy server tại localhost:8000
-    uvicorn.run(app, host="0.0.0.0", port=8000)
