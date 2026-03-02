@@ -1,4 +1,5 @@
 import time
+from datetime import datetime, timezone
 from fastapi import FastAPI
 from pydantic import BaseModel
 from fastapi.middleware.cors import CORSMiddleware
@@ -43,6 +44,21 @@ ALLOWED_DEVICES = {
 }
 
 device_states = {}
+MQTT_ACK_WAIT_SECONDS = 0.15
+
+
+def format_timestamp_iso(unix_timestamp: float) -> str:
+    """
+    Chuyển Unix timestamp sang định dạng ISO 8601 (UTC) dễ đọc cho người dùng.
+
+    Args:
+        unix_timestamp: Thời gian dạng Unix timestamp (giây).
+
+    Returns:
+        Chuỗi thời gian ISO 8601, ví dụ: 2026-02-26T03:20:00Z.
+    """
+    return datetime.fromtimestamp(unix_timestamp, tz=timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
 
 def publish_mqtt(topic: str, payload: Dict[str, Any]) -> Dict[str, Any]:    
     """
@@ -56,25 +72,48 @@ def publish_mqtt(topic: str, payload: Dict[str, Any]) -> Dict[str, Any]:
         Dict chứa status và message
     """
     try:
+        # Với kiến trúc 1 MQTT client, loop/reconnect chỉ được quản lý tại main.py.
+        # API chỉ publish và fail-fast khi client chưa connected để tránh reconnect storm.
+        if not mqtt_client.is_connected():
+            return {
+                "success": False,
+                "error": "MQTT not connected"
+            }
+
         result = mqtt_client.publish(
                 topic=topic,
                 payload=json.dumps(payload),
                 qos=1
             )
-    
-        # Wait for publish confirmation
-        publish = result.wait_for_publish(timeout=2)
-        if publish:
+
+        if result.rc != 0:
+            return {
+                "success": False,
+                "error": f"Publish failed with rc={result.rc}"
+            }
+
+        # Chờ ACK rất ngắn để giảm TTFB của API control.
+        try:
+            result.wait_for_publish(timeout=MQTT_ACK_WAIT_SECONDS)
+        except Exception:
             return {
                 "success": True,
                 "topic": topic,
-                "message": "Message sent successfully"
+                "message": "Message queued successfully"
             }
-        else:
+
+        if result.is_published():
             return {
-                "success": False,
-                "error": "Publish timeout"
+                "success": True,
+                "topic": topic,
+                "message": "Message sent successfully (PUBACK received)"
             }
+
+        return {
+            "success": True,
+            "topic": topic,
+            "message": "Message queued successfully"
+        }
             
     except Exception as e:
         return {
@@ -109,10 +148,12 @@ def control_device(
     device_info = ALLOWED_DEVICES[device_id]
     
     # Prepare MQTT payload
+    event_time = time.time()
     payload = {
         "device_id": device_id,
         "action": action,
-        "timestamp": time.time(),
+        "timestamp": event_time,
+        "timestamp_iso": format_timestamp_iso(event_time),
         "pin": device_info["pin"]
     }
         # 4. Publish to MQTT
@@ -206,10 +247,12 @@ async def direct_control(req: ControlRequest):
     device_info = ALLOWED_DEVICES[device_id]
     
     # Prepare payload
+    event_time = time.time()
     payload = {
         "device_id": device_id,
         "action": action,
-        "timestamp": time.time(),
+        "timestamp": event_time,
+        "timestamp_iso": format_timestamp_iso(event_time),
         "pin": device_info["pin"]
     }
     

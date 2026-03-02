@@ -58,7 +58,7 @@ def on_connect(client, userdata, flags, rc):
 def on_message(client, userdata, msg):
     try:
         payload = json.loads(msg.payload.decode())
-        print("Received:", payload)
+        # print("Received:", payload)
 
         if not is_valid(payload):
             print("Invalid data, skipped")

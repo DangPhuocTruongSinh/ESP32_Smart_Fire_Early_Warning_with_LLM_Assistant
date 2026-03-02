@@ -36,92 +36,92 @@ DHT dht(DHTPIN, DHTTYPE);
  */
 void onMessageReceived(char *topic, byte *payload, unsigned int length)
 {
-  Serial.println("Recieve Message");
-  Serial.print("Topic  : ");
-  Serial.println(topic);
+    Serial.println("Recieve Message");
+    Serial.print("Topic  : ");
+    Serial.println(topic);
 
-  // Chuyển payload từ bytes sang string để in ra
-  String message;
-  for (unsigned int i = 0; i < length; i++)
-  {
-    message += (char)payload[i];
-  }
-  Serial.print("Payload: ");
-  Serial.println(message);
+    // Chuyển payload từ bytes sang string để in ra
+    String message;
+    for (unsigned int i = 0; i < length; i++)
+    {
+        message += (char)payload[i];
+    }
+    Serial.print("Payload: ");
+    Serial.println(message);
 }
 
 // ---------------- WIFI ----------------
 void connectToWifi()
 {
-  WiFi.begin(ssid, password);
-  while (WiFi.status() != WL_CONNECTED)
-  {
-    delay(500);
-    Serial.print(".");
-  }
-  Serial.println("\nWiFi connected: " + WiFi.localIP().toString());
+    WiFi.begin(ssid, password);
+    while (WiFi.status() != WL_CONNECTED)
+    {
+        delay(500);
+        Serial.print(".");
+    }
+    Serial.println("\nWiFi connected: " + WiFi.localIP().toString());
 }
 
 // ---------------- MQTT ----------------
 void connectToMQTT()
 {
-  while (!client.connected())
-  {
-    String clientId = "esp32-" + String((uint32_t)ESP.getEfuseMac(), HEX);
-    Serial.print("MQTT connecting as ");
-    Serial.println(clientId);
-
-    if (client.connect(clientId.c_str(), mqtt_user, mqtt_password))
+    while (!client.connected())
     {
-      Serial.println("Connected to MQTT Broker");
+        String clientId = "esp32-" + String((uint32_t)ESP.getEfuseMac(), HEX);
+        Serial.print("MQTT connecting as ");
+        Serial.println(clientId);
 
-      // Subscribe topic điều khiển sau mỗi lần kết nối thành công
-      // (cần subscribe lại vì session có thể bị reset)
-      client.subscribe(mqtt_sub_topic);
-      Serial.println("Subscribed to: " + String(mqtt_sub_topic));
+        if (client.connect(clientId.c_str(), mqtt_user, mqtt_password))
+        {
+            Serial.println("Connected to MQTT Broker");
+
+            // Subscribe topic điều khiển sau mỗi lần kết nối thành công
+            // (cần subscribe lại vì session có thể bị reset)
+            client.subscribe(mqtt_sub_topic);
+            Serial.println("Subscribed to: " + String(mqtt_sub_topic));
+        }
+        else
+        {
+            Serial.print("MQTT failed, state=");
+            Serial.println(client.state());
+            delay(5000);
+        }
     }
-    else
-    {
-      Serial.print("MQTT failed, state=");
-      Serial.println(client.state());
-      delay(5000);
-    }
-  }
 }
 
 void setup()
 {
-  Serial.begin(115200);
-  dht.begin();
+    Serial.begin(115200);
+    dht.begin();
 
-  connectToWifi();
+    connectToWifi();
 
-  // Cấu hình MQTT trước khi kết nối
-  espClient.setInsecure();
-  client.setServer(mqtt_server, mqtt_port);
-  client.setKeepAlive(60);
-  client.setSocketTimeout(15);
-  client.setCallback(onMessageReceived);
+    // Cấu hình MQTT trước khi kết nối
+    espClient.setInsecure();
+    client.setServer(mqtt_server, mqtt_port);
+    client.setKeepAlive(60);
+    client.setSocketTimeout(15);
+    client.setCallback(onMessageReceived);
 
-  connectToMQTT();
+    connectToMQTT();
 }
 
 void loop()
 {
-  if (!client.connected())
-  {
-    connectToMQTT();
-  }
-  client.loop();
+    if (!client.connected())
+    {
+        connectToMQTT();
+    }
+    client.loop();
 
-  float humidity = dht.readHumidity();
-  float temperature = dht.readTemperature();
-  float gasValue = analogRead(MQ2_PIN);
+    float humidity = dht.readHumidity();
+    float temperature = dht.readTemperature();
+    float gasValue = analogRead(MQ2_PIN);
 
-  char payload[128];
-  snprintf(payload, sizeof(payload), "{\"device\":\"ESP32_01\",\"temperature\": %.2f, \"humidity\": %.2f, \"gas\": %.2f}",
-           temperature, humidity, gasValue);
+    char payload[128];
+    snprintf(payload, sizeof(payload), "{\"device\":\"ESP32_01\",\"temperature\": %.2f, \"humidity\": %.2f, \"gas\": %.2f}",
+             temperature, humidity, gasValue);
 
-  client.publish(mqtt_topic, payload);
-  Serial.println(payload);
+    client.publish(mqtt_pub_topic, payload);
+    // Serial.println(payload);
 }

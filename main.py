@@ -14,7 +14,7 @@ def run_mqtt_ingestion() -> None:
     """Khởi chạy MQTT subscriber nhận dữ liệu cảm biến từ ESP32."""
     # reconnect_on_failure=True: tự động retry kết nối theo reconnect_delay_set()
     # khi broker tạm thời không khả dụng, thay vì ném exception và dừng thread.
-    mqtt_client.loop_forever(reconnect_on_failure=True)
+    mqtt_client.loop_forever()
 
 
 if __name__ == "__main__":
