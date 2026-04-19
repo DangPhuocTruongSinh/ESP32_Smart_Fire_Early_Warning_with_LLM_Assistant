@@ -1,6 +1,8 @@
 import json
+import threading
 import time
 import ssl
+from typing import Any, Dict
 from paho.mqtt.client import Client
 from influxdb_client_3 import InfluxDBClient3, Point
 
@@ -8,6 +10,26 @@ import os
 from dotenv import load_dotenv
 
 load_dotenv()
+
+# ================= Latest env snapshot cache =================
+# Giữ bản copy payload env mới nhất để module notification đính kèm
+# vào email cảnh báo mà không cần query lại InfluxDB (giảm độ trễ khi cháy).
+# Cập nhật trong on_message → truy cập từ thread khác qua get_latest_env().
+_latest_env_lock: threading.Lock = threading.Lock()
+_latest_env: Dict[str, Any] = {}
+
+
+def get_latest_env() -> Dict[str, Any]:
+    """
+    Lấy bản COPY (tránh race) của dữ liệu env mới nhất nhận qua MQTT.
+
+    Returns:
+        Dict payload gần nhất (temperature, humidity, gas, và các trường
+        bổ sung ở ML mode như co/voc/pm_total/ml_class...). Trả về {} nếu
+        chưa có message nào.
+    """
+    with _latest_env_lock:
+        return dict(_latest_env)
 
 # ================= InfluxDB =================
 INFLUX_HOST = os.getenv("INFLUX_HOST")
@@ -52,13 +74,25 @@ def on_connect(client, userdata, flags, rc):
     print("MQTT connected with code:", rc)
     if rc == 0:
         client.subscribe(TOPIC)
+        client.subscribe("device/+/response")
+        # Alert từ ESP32 (fire detection) — notification module sẽ xử lý
+        # qua message_callback_add pattern, nhưng phải subscribe ở đây để
+        # broker thật sự forward message về client.
+        client.subscribe("iot/+/alert")
     else:
         print("Connection failed")
 
 def on_message(client, userdata, msg):
     try:
         payload = json.loads(msg.payload.decode())
-        # print("Received:", payload)
+
+        # Cache snapshot cho notification SỚM — trước khi validate.
+        # Lý do: ML-mode payload không có field 'gas' sẽ fail is_valid(),
+        # nhưng vẫn cần đính kèm snapshot đó vào email cảnh báo.
+        with _latest_env_lock:
+            _latest_env.clear()
+            _latest_env.update(payload)
+            _latest_env["_received_at"] = time.time()
 
         if not is_valid(payload):
             print("Invalid data, skipped")
