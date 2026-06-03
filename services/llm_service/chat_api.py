@@ -453,8 +453,8 @@ class ControlRequest(BaseModel):
 
 
 # API endpoint
-@app.post("/analyze")
-async def analyze(req: ChatRequest):
+@app.post("/chat")
+async def chat(req: ChatRequest):
     now = datetime.now(TZ)
     # Inject thời gian thực vào đầu mỗi message để LLM phân giải đúng
     # các biểu thức giờ mơ hồ như "6 giờ" (sáng hay tối?).

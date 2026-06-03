@@ -21,7 +21,7 @@ function formatTime(ts) {
 }
 
 /**
- * Full-featured chat panel connected to the /analyze LLM endpoint.
+ * Full-featured chat panel connected to the /chat LLM endpoint.
  *
  * Features:
  * - Persistent thread_id so the LLM agent remembers conversation context
@@ -63,7 +63,7 @@ export default function ChatPanel({ injectMessage }) {
   }, [injectMessage])
 
   /**
-   * Send the user's question to the /analyze endpoint and append
+   * Send the user's question to the /chat endpoint and append
    * both the user message and the assistant response to the chat.
    *
    * @param {string} question
@@ -80,7 +80,7 @@ export default function ChatPanel({ injectMessage }) {
     setIsLoading(true)
 
     try {
-      const res = await fetch(`${API_BASE_URL}/analyze`, {
+      const res = await fetch(`${API_BASE_URL}/chat`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ question: trimmed, thread_id: threadId.current }),
@@ -118,7 +118,7 @@ export default function ChatPanel({ injectMessage }) {
       <div className="flex items-center gap-2 px-4 py-3 border-b border-gray-700/50">
         <div className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse" />
         <span className="text-white/90 text-sm font-semibold">Trợ lý AI</span>
-        <span className="ml-auto text-gray-500 text-xs">Ollama • /analyze</span>
+        <span className="ml-auto text-gray-500 text-xs">Ollama • /chat</span>
       </div>
 
       {/* Message list */}
