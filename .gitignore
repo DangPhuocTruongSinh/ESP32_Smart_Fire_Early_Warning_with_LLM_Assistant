@@ -1,7 +1,8 @@
+.cursor
 # ============================================
 # MÔI TRƯỜNG ẢO PYTHON
 # ============================================
-.env/
+.env
 .venv/
 venv/
 env/
@@ -87,13 +88,8 @@ firmware/build/
 # ============================================
 # DỮ LIỆU (không commit dữ liệu thô)
 # ============================================
-data/raw/*
-data/processed/*
-data/labled/*
-!data/raw/.gitkeep
-!data/processed/.gitkeep
-!data/labled/.gitkeep
-
+data/
+services/ml_service/saved_models/
 # ============================================
 # HỆ ĐIỀU HÀNH
 # ============================================

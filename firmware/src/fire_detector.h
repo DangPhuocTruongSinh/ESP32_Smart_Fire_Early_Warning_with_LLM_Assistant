@@ -26,9 +26,10 @@
 #include <cmath>
 #include <Arduino.h>
 
-// TFLite Micro
+// TFLite Micro (Chirale_TensorFlowLite — compatible with TF 2.x models)
+#include "tensorflow/lite/micro/all_ops_resolver.h"
 #include "tensorflow/lite/micro/micro_interpreter.h"
-#include "tensorflow/lite/micro/micro_mutable_op_resolver.h"
+#include "tensorflow/lite/micro/micro_log.h"
 #include "tensorflow/lite/schema/schema_generated.h"
 
 // Auto-generated headers (run: python firmware/convert_model.py)
@@ -67,19 +68,12 @@ public:
             return false;
         }
 
-        // Register only the ops used by CNN1D to minimize binary size
-        static tflite::MicroMutableOpResolver<8> resolver;
-        resolver.AddConv2D();
-        resolver.AddAveragePool2D();
-        resolver.AddMean();               // GlobalAveragePooling1D
-        resolver.AddFullyConnected();
-        resolver.AddSoftmax();
-        resolver.AddReshape();
-        resolver.AddMul();                // BatchNorm
-        resolver.AddAdd();                // BatchNorm
+        // Register all ops — simpler and avoids missing op issues
+        // Uses ~30-50 KB more flash vs selective resolver, acceptable with huge_app.csv
+        static tflite::AllOpsResolver resolver;
 
         static tflite::MicroInterpreter static_interp(
-            model_, resolver, tensor_arena_, TENSOR_ARENA_SIZE);
+            model_, resolver, tensor_arena_, TENSOR_ARENA_SIZE, nullptr);
         interpreter_ = &static_interp;
 
         if (interpreter_->AllocateTensors() != kTfLiteOk) {
@@ -354,10 +348,18 @@ private:
     void runInference() {
         fillInputTensor();
 
+        uint32_t t_start = micros();
+
         if (interpreter_->Invoke() != kTfLiteOk) {
             Serial.println("[FireDetector] Invoke() failed");
             return;
         }
+
+        uint32_t t_end = micros();
+        uint32_t inference_time_us = t_end - t_start;
+        
+        Serial.printf("[FireDetector] TFLite Inference Speed: %u us (%.3f ms)\n", 
+                      inference_time_us, inference_time_us / 1000.0f);
 
         // Dequantize output: prob = (q - zero_point) * scale
         TfLiteTensor* output  = interpreter_->output(0);

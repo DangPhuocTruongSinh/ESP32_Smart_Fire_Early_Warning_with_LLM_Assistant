@@ -16,12 +16,14 @@ import threading
 from apscheduler.schedulers.background import BackgroundScheduler
 from apscheduler.triggers.date import DateTrigger
 import uuid
+from dotenv import load_dotenv
+import os
 
-# Lấy các model đang CHẠY (loaded vào RAM)
-response = requests.get("http://localhost:11434/api/ps")
-models = response.json()
-model_name = models["models"][0]["name"]
-print("Models: ", model_name)
+# # Lấy các model đang CHẠY (loaded vào RAM)
+# response = requests.get("http://localhost:11434/api/ps")
+# models = response.json()
+# model_name = models["models"][0]["name"]
+# print("Models: ", model_name)
 
 import os
 from dotenv import load_dotenv
@@ -29,6 +31,8 @@ from zoneinfo import ZoneInfo
 
 load_dotenv()
 BUCKET = os.getenv("BUCKET")
+BASE_URL = os.getenv("BASE_URL")
+BASE_MODEL = os.getenv("BASE_MODEL")
 
 from services.ingestion import mqtt_client, influx_client
 from services.llm_service.log import log_user_message, log_tool_calls, log_assistant_response, log_error
@@ -41,6 +45,33 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+
+@app.on_event("startup")
+def load_llm_model():
+    """Pre-load Ollama model vào RAM khi FastAPI server khởi động.
+
+    Gọi POST /api/generate với keep_alive=-1 và không có prompt →
+    Ollama load model vào VRAM/RAM mà không generate text.
+    Các request inference sau đó sẽ không phải chờ cold-start.
+    """
+    ollama_url = (BASE_URL or "http://localhost:11434").rstrip("/")
+    print(f"[Startup] Loading model '{BASE_MODEL}' into RAM via Ollama...")
+    try:
+        resp = requests.post(
+            f"{ollama_url}/api/generate",
+            json={"model": BASE_MODEL, "keep_alive": -1},
+            timeout=120,
+        )
+        resp.raise_for_status()
+        print(f"[Startup] ✓ Model '{BASE_MODEL}' loaded — ready for inference.")
+    except requests.exceptions.ConnectionError:
+        print(f"[Startup][WARN] Ollama not reachable at {ollama_url} — model not pre-loaded.")
+    except requests.exceptions.HTTPError as exc:
+        print(f"[Startup][WARN] Ollama HTTP error: {exc} — model not pre-loaded.")
+    except Exception as exc:
+        print(f"[Startup][WARN] Unexpected error pre-loading model: {exc}")
+
 
 # Định nghĩa Tool lấy dữ liệu cảm biến
 @tool
@@ -409,14 +440,14 @@ Khi người dùng hỏi về trạng thái thiết bị (vd: "Các thiết bị
 tools = [get_sensor_data, control_device, get_device_status]
 
 # Ollama + Langchain for chatbot
-llm = ChatOllama(model=model_name)
+llm = ChatOllama(model=BASE_MODEL, reasoning=False)
 memory = InMemorySaver()
 
 agent = create_agent(model=llm, system_prompt=system_prompt, tools=tools, checkpointer=memory)
 
 class ChatRequest(BaseModel):
     question: str
-    thread_id: str = "1"
+    thread_id: str = "SinhDang"
 class ControlRequest(BaseModel):
     commands: List[DeviceCommand]
 
@@ -469,11 +500,7 @@ async def direct_control(req: ControlRequest):
         ]
     }
     """
-    
-    # Chúng ta có thể tận dụng lại logic của Tool để không bị lặp code
     results = control_device.invoke({"commands": req.commands})
-    
-    # Định dạng lại response cho chuẩn REST API
     all_success = all("✅" in msg for msg in results.values())
     
     return {
@@ -483,25 +510,30 @@ async def direct_control(req: ControlRequest):
 
 
 @app.get("/sensor/history")
-async def sensor_history(minutes: int = 30):
+async def sensor_history(minutes: int = 5):
     """
     Trả về time series dữ liệu cảm biến (nhiệt độ, độ ẩm, khí gas) theo từng phút,
     dùng để vẽ chart trực tiếp trong UI mà không cần Grafana iframe.
 
+    Demo mode: các điểm dữ liệu có thêm `ground_truth` và `ml_class`
+    để dashboard đổi màu nền chart theo nhãn.
+
     Args:
-        minutes: Khoảng thời gian cần lấy dữ liệu tính từ hiện tại (mặc định 30 phút).
+        minutes: Khoảng thời gian cần lấy dữ liệu tính từ hiện tại (mặc định 5 phút).
 
     Returns:
         JSON với danh sách các điểm dữ liệu theo thứ tự thời gian tăng dần.
-        Mỗi điểm có dạng: { time, temperature, humidity, gas }
+        Mỗi điểm có dạng: { time, temperature, humidity, gas, ground_truth?, ml_class? }
     """
     try:
         query = f"""
         SELECT
-            DATE_BIN(INTERVAL '1 minute', time, TIMESTAMP '1970-01-01 00:00:00') AS time,
-            AVG(temperature) AS temperature,
-            AVG(humidity)    AS humidity,
-            AVG(gas)         AS gas
+            DATE_BIN(INTERVAL '15 seconds', time, TIMESTAMP '1970-01-01 00:00:00') AS time,
+            AVG(temperature)    AS temperature,
+            AVG(humidity)       AS humidity,
+            AVG(gas)            AS gas,
+            MAX(ground_truth)   AS ground_truth,
+            MAX(ml_class)       AS ml_class
         FROM 'environment'
         WHERE time >= now() - interval '{minutes} minutes'
         GROUP BY 1
@@ -522,17 +554,26 @@ async def sensor_history(minutes: int = 30):
             else:
                 time_str = str(ts)
 
-            data.append({
+            point = {
                 "time":        time_str,
                 "temperature": round(row["temperature"], 1) if row.get("temperature") is not None else None,
                 "humidity":    round(row["humidity"], 1)    if row.get("humidity")    is not None else None,
                 "gas":         round(row["gas"])            if row.get("gas")         is not None else None,
-            })
+            }
+
+            # Demo mode optional fields — None khi không phải demo
+            if row.get("ground_truth") is not None:
+                point["ground_truth"] = row["ground_truth"]
+            if row.get("ml_class") is not None:
+                point["ml_class"] = row["ml_class"]
+
+            data.append(point)
 
         return {"data": data, "minutes": minutes}
 
     except Exception as e:
         return {"error": str(e), "data": []}
+
 
 
 @app.get("/devices/status")
@@ -555,3 +596,51 @@ async def list_devices():
     
     return {"devices": devices}
 
+
+@app.get("/sensor/raw")
+async def sensor_raw(limit: int = 20):
+    """
+    [DEBUG] Trả về raw data points gần nhất — KHÔNG GROUP BY, KHÔNG AVG.
+    Dùng để xác định nguồn gốc giá trị sai (real sensor vs demo payload).
+
+    Mỗi point có thêm 'mode' và 'device' để phân biệt:
+      - mode = "demo_playback" → từ ESP32 demo
+      - mode = "rule_based"   → từ ESP32 thật (sensor vật lý)
+      - mode = null           → từ firmware cũ, không có mode field
+    """
+    try:
+        query = f"""
+        SELECT time, temperature, humidity, gas, ground_truth, ml_class, mode, device
+        FROM 'environment'
+        WHERE time >= now() - interval '10 minutes'
+        ORDER BY time DESC
+        LIMIT {limit}
+        """
+        table = influx_client.query(query=query, database=BUCKET, language="sql")
+        rows = table.to_pylist()
+
+        data = []
+        for row in rows:
+            ts = row.get("time")
+            if hasattr(ts, "isoformat"):
+                time_str = ts.isoformat().replace("+00:00", "Z")
+            elif isinstance(ts, (int, float)):
+                time_str = datetime.fromtimestamp(ts / 1e9, tz=timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+            else:
+                time_str = str(ts)
+
+            data.append({
+                "time":         time_str,
+                "temperature":  round(row["temperature"], 2) if row.get("temperature") is not None else None,
+                "humidity":     round(row["humidity"], 2)    if row.get("humidity")    is not None else None,
+                "gas":          row.get("gas"),
+                "ground_truth": row.get("ground_truth"),
+                "ml_class":     row.get("ml_class"),
+                "mode":         row.get("mode"),
+                "device":       row.get("device"),
+            })
+
+        return {"count": len(data), "data": data}
+
+    except Exception as e:
+        return {"error": str(e), "data": []}

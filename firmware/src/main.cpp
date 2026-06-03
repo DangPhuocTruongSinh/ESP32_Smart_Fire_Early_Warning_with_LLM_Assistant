@@ -2,7 +2,7 @@
  * ============================================================
  *  Fire Detection — ESP32 FreeRTOS Architecture
  * ============================================================
- *  Hai chế độ biên dịch (chọn qua platformio.ini):
+ *  Ba chế độ biên dịch (chọn qua platformio.ini):
  *
  *  [env:esp32dev]         USE_RULE_BASED=1
  *    → Rule-based (gas > 1500 || temp > 60°C), phần cứng hiện tại
@@ -10,6 +10,10 @@
  *  [env:esp32dev-ml]      USE_TFLITE=1
  *    → CNN1D TFLite INT8 inference, cần sensor đầy đủ
  *      Yêu cầu thêm: MQ-7 (CO), SGP30 (VOC/H2), PMS5003 (PM), UV sensor
+ *
+ *  [env:esp32dev-demo]    USE_TFLITE=1 + USE_DEMO=1
+ *    → Demo playback: phát lại 100 samples từ demo_sequences.h qua CNN1D
+ *      Không cần sensor vật lý — chỉ cần ESP32
  *
  *  Tasks:
  *  [T1] taskSensorPublish — đọc sensor mỗi SAMPLE_INTERVAL_MS
@@ -33,10 +37,14 @@
 
 #ifdef USE_TFLITE
 #include "fire_detector.h"
-// Sensor thêm
+#ifdef USE_DEMO
+#include "demo_sequences.h"
+#else
+// Sensor thêm (chỉ cần khi không phải demo mode)
 #include <Adafruit_SGP30.h>
 #include <Adafruit_PM25AQI.h>
-#endif
+#endif // USE_DEMO
+#endif // USE_TFLITE
 
 // ─────────────────────────────────────────────
 //  Pin & hardware config
@@ -63,8 +71,8 @@
 // ─────────────────────────────────────────────
 //  Network & MQTT config
 // ─────────────────────────────────────────────
-const char *WIFI_SSID = "Slime 2.4GHz";
-const char *WIFI_PASSWORD = "0934116403";
+const char *WIFI_SSID = "141517";
+const char *WIFI_PASSWORD = "141517@123";
 
 const char *MQTT_SERVER = "kingfisher.lmq.cloudamqp.com";
 const int MQTT_PORT = 8883;
@@ -100,9 +108,11 @@ static DHT dht(DHTPIN, DHTTYPE);
 
 #ifdef USE_TFLITE
 static FireDetector    fireDetector;
+#ifndef USE_DEMO
 static Adafruit_SGP30  sgp30;
 static Adafruit_PM25AQI pmsAQI;
 static HardwareSerial  pmsSerial(2); // UART2 for PMS5003
+#endif // !USE_DEMO
 
 // ── 2-tier detection state machine ───────────────────────────────────────
 enum DetectionState : uint8_t {
@@ -283,9 +293,140 @@ static void taskSensorPublish(void *pvParam)
 #endif // USE_RULE_BASED
 
 // ─────────────────────────────────────────────
-//  TASK 1b — Sensor + CNN1D Inference (USE_TFLITE)
+//  TASK 1b — Demo Playback (USE_TFLITE + USE_DEMO)
 // ─────────────────────────────────────────────
-#ifdef USE_TFLITE
+#if defined(USE_TFLITE) && defined(USE_DEMO)
+static void taskSensorPublish(void *pvParam)
+{
+    Serial.println("[Demo] Starting demo playback — 100 steps × 5s");
+
+    TickType_t xLastWake = xTaskGetTickCount();
+
+    for (int step = 0; step < kDemoTotalSteps; step++)
+    {
+        // ── Read demo sensor values from flash ────────────────────────────
+        float co       = kDemoData[step][0];
+        float h2       = kDemoData[step][1];
+        float humidity = kDemoData[step][2];
+        float pm05     = kDemoData[step][3];
+        float pm10     = kDemoData[step][4];
+        float pm_typ   = kDemoData[step][5];
+        float pm_total = kDemoData[step][6];
+        float temp     = kDemoData[step][7];
+        float uv       = kDemoData[step][8];
+        float voc      = kDemoData[step][9];
+
+        // ── Ground truth label ────────────────────────────────────────────
+        static const char* const kLabelNames[] = {"Background", "Fire", "Nuisance"};
+        uint8_t gt_idx = kDemoLabels[step];
+        const char* gt_str = kLabelNames[gt_idx];
+
+        // ── Run CNN1D inference ───────────────────────────────────────────
+        bool ran_inference = fireDetector.push(
+            temp, humidity, co, h2, pm05, pm10, pm_typ, pm_total, uv, voc);
+
+        // ── Build MQTT payload ────────────────────────────────────────────
+        char payload[512];
+
+        if (ran_inference)
+        {
+            float probs[3];
+            fireDetector.getProbabilities(probs);
+            bool fire_alert = (fireDetector.getClass() == FireDetector::Fire);
+
+            Serial.printf("[DEMO] Step %3d/%d | GT: %-10s | ML: %-10s (%.2f) | "
+                          "prob [%.2f, %.2f, %.2f]\n",
+                          step, kDemoTotalSteps, gt_str,
+                          fireDetector.className(), fireDetector.getConfidence(),
+                          probs[0], probs[1], probs[2]);
+
+            snprintf(payload, sizeof(payload),
+                     "{\"device\":\"ESP32_01\","
+                     "\"temperature\":%.2f,\"humidity\":%.2f,\"gas\":%.2f,"
+                     "\"ground_truth\":\"%s\","
+                     "\"demo_step\":%d,\"demo_total\":%d,"
+                     "\"ml_class\":\"%s\","
+                     "\"ml_confidence\":%.3f,"
+                     "\"prob_bg\":%.3f,\"prob_fire\":%.3f,\"prob_nuis\":%.3f,"
+                     "\"fire_alert\":%s,"
+                     "\"mode\":\"demo_playback\"}",
+                     temp, humidity, pm_total,
+                     gt_str,
+                     step, kDemoTotalSteps,
+                     fireDetector.className(),
+                     fireDetector.getConfidence(),
+                     probs[0], probs[1], probs[2],
+                     fire_alert ? "true" : "false");
+
+            // Publish fire alert topic when CNN detects fire
+            if (fire_alert)
+            {
+                if (xSemaphoreTake(mqttMutex, pdMS_TO_TICKS(300)) == pdTRUE)
+                {
+                    if (mqttClient.connected())
+                    {
+                        char alert[128];
+                        snprintf(alert, sizeof(alert),
+                                 "{\"status\":\"FIRE_DETECTED\","
+                                 "\"confidence\":%.3f,\"mode\":\"demo_playback\"}",
+                                 fireDetector.getConfidence());
+                        mqttClient.publish(TOPIC_PUB_ALERT, alert);
+                        Serial.printf("[DEMO] *** FIRE ALERT (CNN1D %.1f%%) ***\n",
+                                      fireDetector.getConfidence() * 100);
+                    }
+                    xSemaphoreGive(mqttMutex);
+                }
+            }
+        }
+        else
+        {
+            // Buffer still filling (step < kWindowSize)
+            Serial.printf("[DEMO] Step %3d/%d | GT: %-10s | ML: warming_up (%d/%d)\n",
+                          step, kDemoTotalSteps, gt_str,
+                          fireDetector.stepCount(), kWindowSize);
+
+            snprintf(payload, sizeof(payload),
+                     "{\"device\":\"ESP32_01\","
+                     "\"temperature\":%.2f,\"humidity\":%.2f,\"gas\":%.2f,"
+                     "\"ground_truth\":\"%s\","
+                     "\"demo_step\":%d,\"demo_total\":%d,"
+                     "\"ml_class\":\"warming_up\","
+                     "\"fire_alert\":false,"
+                     "\"mode\":\"demo_playback\"}",
+                     temp, humidity, pm_total,
+                     gt_str,
+                     step, kDemoTotalSteps);
+        }
+
+        // ── Publish env payload ───────────────────────────────────────────
+        if (xSemaphoreTake(mqttMutex, pdMS_TO_TICKS(300)) == pdTRUE)
+        {
+            if (mqttClient.connected())
+                mqttClient.publish(TOPIC_PUB_ENV, payload);
+            xSemaphoreGive(mqttMutex);
+        }
+
+        vTaskDelayUntil(&xLastWake, SAMPLE_INTERVAL_MS);
+    }
+
+    // ── Demo complete ─────────────────────────────────────────────────────
+    Serial.println("[DEMO] ✓ DEMO_COMPLETE — all 100 steps played back");
+    if (xSemaphoreTake(mqttMutex, pdMS_TO_TICKS(500)) == pdTRUE)
+    {
+        if (mqttClient.connected())
+            mqttClient.publish(TOPIC_PUB_ENV,
+                "{\"device\":\"ESP32_01\",\"status\":\"DEMO_COMPLETE\","
+                "\"mode\":\"demo_playback\"}");
+        xSemaphoreGive(mqttMutex);
+    }
+    vTaskDelete(NULL);
+}
+#endif // USE_TFLITE && USE_DEMO
+
+// ─────────────────────────────────────────────
+//  TASK 1c — Sensor + CNN1D Inference (USE_TFLITE, no demo)
+// ─────────────────────────────────────────────
+#if defined(USE_TFLITE) && !defined(USE_DEMO)
 static void taskSensorPublish(void *pvParam)
 {
     // ── Sensor initialization ─────────────────────────────────────────────
@@ -538,7 +679,7 @@ static void taskSensorPublish(void *pvParam)
         vTaskDelayUntil(&xLastWake, SAMPLE_INTERVAL_MS);
     }
 }
-#endif // USE_TFLITE
+#endif // USE_TFLITE && !USE_DEMO
 
 // ─────────────────────────────────────────────
 //  TASK 2 — MQTT Receive (shared by both modes)
@@ -610,8 +751,22 @@ void setup()
     mqttMutex = xSemaphoreCreateMutex();
     configASSERT(mqttMutex);
 
-#ifdef USE_TFLITE
-    // CNN khởi tạo lazy — chỉ gọi begin() khi Tier-1 threshold bị vượt lần đầu.
+#if defined(USE_TFLITE) && defined(USE_DEMO)
+    // Demo mode: khởi tạo CNN ngay lập tức (eager init — không lazy)
+    // Cần sẵn sàng từ step 0 vì không có Tier-1 trigger.
+    Serial.printf("[Setup] Demo mode — initializing CNN1D eagerly. RAM free: %u KB\n",
+                  ESP.getFreeHeap() / 1024);
+    if (!fireDetector.begin())
+    {
+        Serial.println("[Setup][ERROR] FireDetector init failed — demo cannot start");
+        // Không dừng hệ thống — task sẽ detect và thoát
+    }
+    else
+    {
+        Serial.println("[Setup] CNN1D ready for demo playback");
+    }
+#elif defined(USE_TFLITE)
+    // ML mode: CNN khởi tạo lazy — chỉ gọi begin() khi Tier-1 threshold bị vượt lần đầu.
     // Không chiếm CPU lúc boot, tensor_arena_ đã được cấp phát tĩnh trong RAM.
     Serial.printf("[Setup] 2-tier mode ready — RAM free: %u KB\n",
                   ESP.getFreeHeap() / 1024);

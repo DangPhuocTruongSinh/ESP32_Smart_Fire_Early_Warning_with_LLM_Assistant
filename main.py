@@ -1,14 +1,18 @@
 import threading
 import uvicorn
-
-from services.llm_service.chat_api import app
 from services.ingestion.mqtt_to_influxdb import mqtt_client, get_latest_env
 from services.notification import register_fire_alert_handler
 
 
 def run_api_server() -> None:
     """Khởi chạy FastAPI server (LLM Chat API + Device Control)."""
-    uvicorn.run(app, host="0.0.0.0", port=8000, log_level="info")
+    uvicorn.run(
+        "services.llm_service.chat_api:app",
+        host="0.0.0.0",
+        port=8000,
+        log_level="info",
+    )
+
 
 
 def run_mqtt_ingestion() -> None:

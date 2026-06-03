@@ -95,11 +95,15 @@ def write_model_header(path: pathlib.Path, data: bytes):
         "alignas(8) const uint8_t kCnn1dModelData[] = {",
     ]
     hex_bytes = []
-    for i, b in enumerate(data):
+    for b in data:
         hex_bytes.append(f"0x{b:02x}")
-        if (i + 1) % 16 == 0:
-            hex_bytes.append("\n  ")
-    lines.append("  " + ", ".join(hex_bytes))
+    
+    # Chunk into lines of 16 bytes for neat formatting
+    byte_lines = []
+    for i in range(0, len(hex_bytes), 16):
+        byte_lines.append("  " + ", ".join(hex_bytes[i:i+16]))
+    
+    lines.append(",\n".join(byte_lines))
     lines.append("};")
     path.write_text("\n".join(lines))
 

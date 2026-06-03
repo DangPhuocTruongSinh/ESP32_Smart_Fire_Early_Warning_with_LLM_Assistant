@@ -3,6 +3,31 @@ import SensorCharts from './components/SensorCharts'
 import ChatPanel from './components/ChatPanel'
 import DeviceStatus from './components/DeviceStatus'
 
+// ── Alarm phase visual styles for the full-page background ────────────────────
+const ALARM_STYLES = {
+  Background: {
+    bgClass: 'bg-gray-950',
+    overlay: null,
+    headerBg: 'bg-gray-900/80',
+    headerBorder: 'border-gray-800',
+    banner: null,
+  },
+  Nuisance: {
+    bgClass: 'bg-gray-950',
+    overlay: 'bg-yellow-500/5',
+    headerBg: 'bg-yellow-900/30',
+    headerBorder: 'border-yellow-700/50',
+    banner: { emoji: '🟡', text: 'NUISANCE DETECTED — Phát hiện nhiễu', color: 'text-yellow-300', bg: 'bg-yellow-900/60 border-yellow-600/50' },
+  },
+  Fire: {
+    bgClass: 'bg-gray-950',
+    overlay: 'bg-red-500/8 animate-pulse',
+    headerBg: 'bg-red-900/40',
+    headerBorder: 'border-red-600/60',
+    banner: { emoji: '🔴', text: 'FIRE DETECTED — Phát hiện cháy!', color: 'text-red-300', bg: 'bg-red-900/70 border-red-500/60' },
+  },
+}
+
 /**
  * Root application component.
  *
@@ -22,10 +47,34 @@ export default function App() {
    */
   const [injectedMessage, setInjectedMessage] = useState(null)
 
+  /**
+   * Current alarm phase from SensorCharts — drives the full-page
+   * background visual (Background / Nuisance / Fire).
+   */
+  const [alarmPhase, setAlarmPhase] = useState('Background')
+
+  const alarm = ALARM_STYLES[alarmPhase] || ALARM_STYLES.Background
+
   return (
-    <div className="flex flex-col h-screen bg-gray-950 text-white overflow-hidden">
+    <div className={`flex flex-col h-screen ${alarm.bgClass} text-white overflow-hidden relative transition-colors duration-700`}>
+      {/* ── Full-page alarm overlay (Nuisance / Fire glow) ──── */}
+      {alarm.overlay && (
+        <div className={`absolute inset-0 ${alarm.overlay} pointer-events-none z-0 transition-opacity duration-700`} />
+      )}
+
+      {/* ── Alarm banner ────────────────────────────────────── */}
+      {alarm.banner && (
+        <div className={`flex items-center justify-center gap-2 px-4 py-2 border-b ${alarm.banner.bg} backdrop-blur-sm z-10 shrink-0`}>
+          <span className="text-lg">{alarm.banner.emoji}</span>
+          <span className={`text-sm font-bold ${alarm.banner.color} tracking-wide`}>
+            {alarm.banner.text}
+          </span>
+          <span className="text-lg">{alarm.banner.emoji}</span>
+        </div>
+      )}
+
       {/* ── Header ──────────────────────────────────────────── */}
-      <header className="flex items-center gap-3 px-6 py-3 border-b border-gray-800 bg-gray-900/80 backdrop-blur-sm shrink-0">
+      <header className={`flex items-center gap-3 px-6 py-3 border-b ${alarm.headerBorder} ${alarm.headerBg} backdrop-blur-sm shrink-0 z-10 transition-colors duration-700`}>
         <div className="flex items-center gap-2">
           <span className="text-xl">🔥</span>
           <div>
@@ -42,11 +91,11 @@ export default function App() {
       </header>
 
       {/* ── Main area ───────────────────────────────────────── */}
-      <main className="flex flex-1 gap-4 p-4 overflow-hidden min-h-0">
+      <main className="flex flex-1 gap-4 p-4 overflow-hidden min-h-0 z-10">
 
         {/* Left: Sensor charts */}
         <section className="flex-[3] min-w-0 min-h-0">
-          <SensorCharts />
+          <SensorCharts onAlarmPhaseChange={setAlarmPhase} />
         </section>
 
         {/* Right: Devices + Chat */}

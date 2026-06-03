@@ -53,20 +53,39 @@ influx_client = InfluxDBClient3(
     org=ORG
 )
 
-# query = """SELECT *
-#         FROM 'environment'
-#         WHERE time >= now() - interval '24 hours'
-#         ORDER BY time DESC"""
-
-# table = influx_client.query(query=query, database=BUCKET, language="sql")
+# Pre-populate _latest_env from InfluxDB on startup
+try:
+    startup_query = """SELECT temperature, humidity, gas, ml_class, ml_confidence, mode, device
+            FROM 'environment'
+            ORDER BY time DESC
+            LIMIT 1"""
+    table = influx_client.query(query=startup_query, database=BUCKET, language="sql")
+    rows = table.to_pylist()
+    if rows:
+        with _latest_env_lock:
+            _latest_env.update(rows[0])
+            _latest_env["_received_at"] = time.time()
+        print("✓ Pre-populated _latest_env from InfluxDB:", _latest_env)
+except Exception as e:
+    print("⚠ Could not pre-populate _latest_env on startup:", e)
 
 # ================= Validation =================
 def is_valid(data):
-    return (
-        0 <= data["temperature"] <= 60 and
-        0 <= data["humidity"] <= 100 and
-        0 <= data["gas"] <= 4095
-    )
+    # Demo playback: skip gas range check (gas = pm_total ~1–10 µg/m³, not ADC 0–4095)
+    # Also skip if required fields are missing (e.g. DEMO_COMPLETE sentinel payload)
+    try:
+        if data.get("mode") == "demo_playback":
+            return (
+                0 <= data["temperature"] <= 60 and
+                0 <= data["humidity"] <= 100
+            )
+        return (
+            0 <= data["temperature"] <= 60 and
+            0 <= data["humidity"] <= 100 and
+            0 <= data["gas"] <= 4095
+        )
+    except (KeyError, TypeError):
+        return False
 
 
 # ================= MQTT Callbacks =================
@@ -86,7 +105,7 @@ def on_message(client, userdata, msg):
     try:
         payload = json.loads(msg.payload.decode())
 
-        # Cache snapshot cho notification SỚM — trước khi validate.
+        # Cache snapshot cho notification SỤM — trước khi validate.
         # Lý do: ML-mode payload không có field 'gas' sẽ fail is_valid(),
         # nhưng vẫn cần đính kèm snapshot đó vào email cảnh báo.
         with _latest_env_lock:
@@ -103,9 +122,21 @@ def on_message(client, userdata, msg):
             .tag("device", payload.get("device", "esp32_01"))
             .field("temperature", float(payload["temperature"]))
             .field("humidity", float(payload["humidity"]))
-            .field("gas", int(payload["gas"]))
+            .field("gas", int(float(payload.get("gas", 0))))
             .time(time.time_ns())
         )
+
+        # Demo mode: ghi thêm các trường phụ nếu có — dùng cho dashboard visualization
+        if payload.get("ground_truth"):
+            point = point.field("ground_truth", str(payload["ground_truth"]))
+        if payload.get("ml_class"):
+            point = point.field("ml_class", str(payload["ml_class"]))
+        if payload.get("mode"):
+            point = point.tag("mode", str(payload["mode"]))
+        if payload.get("ml_confidence") is not None:
+            point = point.field("ml_confidence", float(payload["ml_confidence"]))
+        if payload.get("demo_step") is not None:
+            point = point.field("demo_step", int(payload["demo_step"]))
 
         influx_client.write(database=BUCKET, record=point)
 

@@ -209,11 +209,14 @@ def register_fire_alert_handler(
             except Exception as e:
                 logger.warning("env_snapshot_getter raised: %s", e)
 
+        formatted_snapshot = _format_snapshot(snapshot_raw)
+        logger.info("Snapshot Raw: %s | Formatted: %s", snapshot_raw, formatted_snapshot)
+
         event = {
             "device":          device_id,
             "confidence":      confidence,
             "mode":            mode,
-            "sensor_snapshot": _format_snapshot(snapshot_raw),
+            "sensor_snapshot": formatted_snapshot,
             "detected_at":     datetime.now(_TZ),
         }
 
